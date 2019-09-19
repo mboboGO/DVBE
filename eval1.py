@@ -1,4 +1,4 @@
-#from __future__ import print_function
+from __future__ import print_function
 import argparse
 import os
 import random
@@ -18,9 +18,12 @@ import torch.utils.data
 import torch.utils.data.distributed
 
 import sys
+sys.path.append('./vision')
 import torchvision.transforms as transforms
-import datasets
-import models
+from torchvision.transforms.img_proc import *
+import torchvision.datasets as datasets
+import torchvision.models as models
+
 from utils import *
 
 model_names = sorted(name for name in models.__dict__
@@ -35,7 +38,6 @@ parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet18',
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
-parser.add_argument('--backbone', default='resnet18', help='backbone')
 parser.add_argument('--save_path', '-s', metavar='SAVE', default='',
                     help='saving path')
 parser.add_argument('-j', '--workers', default=3, type=int, metavar='N',
@@ -74,12 +76,8 @@ parser.add_argument('--gpu', default=None, type=int,
                     help='GPU id to use.')
 parser.add_argument('--is_fix', dest='is_fix', action='store_true',
                     help='is_fix.')
-
-''' gcn'''
-parser.add_argument('--gcn_k', dest='gcn_k', default=0, type=int,
-                    help='k in gcn.')
-''' loss weights '''
-parser.add_argument('--alpha', default=0, type=float, help='alpha.')
+parser.add_argument('--is_att', dest='is_att', action='store_true',
+                    help='is_att.')
                     
 best_prec1 = 0
 
@@ -89,7 +87,6 @@ def main():
     args = parser.parse_args()
     print(args)
 
-    ''' save path '''
     if not os.path.exists(args.save_path):
         os.makedirs(args.save_path)
 
@@ -116,31 +113,23 @@ def main():
 
     ''' data load info '''
     data_info = h5py.File(os.path.join('./data',args.data,'data_info.h5'), 'r')
-    img_path = str(data_info['img_path'][...]).replace("b'",'').replace("'",'')
+    img_path = str(data_info['img_path'][...])
     nc = data_info['all_att'][...].shape[0]
     sf_size = data_info['all_att'][...].shape[1]
     semantic_data = {'seen_class':data_info['seen_class'][...],
                      'unseen_class': data_info['unseen_class'][...],
                      'all_class':np.arange(nc),
                      'all_att': data_info['all_att'][...]}
-    ''' load semantic data'''
-    args.num_classes = nc
-    args.sf_size = sf_size
-    args.sf = semantic_data['all_att']
     
-    # adj
-    adj = adj_matrix(args.sf,args.gcn_k)
-    args.adj=adj
-    print('adj',adj)
-    
-    ''' model building '''
+    # create model
+    params = {'num_classes':nc,'is_fix':args.is_fix, 'sf_size':sf_size, 'is_att':args.is_att}
     if args.pretrained:
         print("=> using pre-trained model '{}'".format(args.arch))
         best_prec1=0
-        model,criterion = models.__dict__[args.arch](pretrained=True,args=args)
+        model,criterion = models.__dict__[args.arch](pretrained=True,params=params)
     else:
         print("=> creating model '{}'".format(args.arch))
-        model,criterion = models.__dict__[args.arch](args=args)
+        model,criterion = models.__dict__[args.arch](params=params)
     print("=> is the backbone fixed: '{}'".format(args.is_fix))
 
     if args.gpu is not None:
@@ -160,29 +149,38 @@ def main():
     
     ''' optimizer '''
     odr_params = [v for k, v in model.named_parameters() if 'odr_' in k]
-    zsr_params = [v for k, v in model.named_parameters() if 'zsr_' in k]
+    zsl_params = [v for k, v in model.named_parameters() if 'zsl_' in k]
 
     odr_optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, odr_params),
                      args.lr1, momentum=args.momentum, weight_decay=args.weight_decay)
-    zsr_optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, zsr_params), args.lr2,
+    zsl_optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, zsl_params), args.lr2,
                                 betas=(0.5,0.999),weight_decay=args.weight_decay)
                                 
     optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, model.parameters()),
                      args.lr1, momentum=args.momentum, weight_decay=args.weight_decay)
 
+    #optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), args.lr,
+    #                            betas=(0.5,0.999),weight_decay=args.weight_decay)
+        
+
     ''' optionally resume from a checkpoint'''
     if args.resume:
         if os.path.isfile(args.resume):
-            print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
-            #args.start_epoch = checkpoint['epoch']
-            if(best_prec1==0):
-                best_prec1 = checkpoint['best_prec1']
-            print('=> pretrained acc {:.4F}'.format(best_prec1))
-            model.load_state_dict(checkpoint['state_dict'])
-            #optimizer.load_state_dict(checkpoint['optimizer'])
-            print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.resume, checkpoint['epoch']))
+            model_dict = model.state_dict()
+            pretrained_dict = checkpoint['state_dict']
+            pretrained_dict = {k.replace('v_','odr_'): v for k, v in pretrained_dict.items()}
+            pretrained_dict = {k.replace('a_','zsl_'): v for k, v in pretrained_dict.items()}
+            pretrained_dict = {k.replace('cls','classifier'): v for k, v in pretrained_dict.items()}
+            pretrained_dict = {k.replace('classifier1','aux'): v for k, v in pretrained_dict.items()}
+            pretrained_dict = {k.replace('zsl_classifier','zsl_sem'): v for k, v in pretrained_dict.items()}
+            pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+            for k, v in model_dict.items():
+                if k not in pretrained_dict:
+                    print('=> missing loadding:',k)
+            model_dict.update(pretrained_dict)
+            model.load_state_dict(model_dict)
+
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
@@ -216,36 +214,9 @@ def main():
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
         
-    for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            train_sampler.set_epoch(epoch)
-        adjust_learning_rate(optimizer, odr_optimizer, zsr_optimizer, epoch)
+   
+    prec1 = validate(val_loader1, val_loader2, semantic_data, model, criterion)
 
-        # train for one epoch
-        train(train_loader,semantic_data, model, criterion, optimizer, odr_optimizer, zsr_optimizer, epoch,is_fix=args.is_fix)
-        
-        # evaluate on validation set
-        prec1 = validate(val_loader1, val_loader2, semantic_data, model, criterion)
-
-        # remember best prec@1 and save checkpoint
-        is_best = prec1 > best_prec1
-        best_prec1 = max(prec1, best_prec1)
-
-        # save model
-        if args.is_fix:
-            save_path = os.path.join(args.save_path,'fix.model')
-        else:
-            save_path = os.path.join(args.save_path,args.arch+('_{:.4f}.model').format(best_prec1))
-        if is_best:
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_prec1': best_prec1,
-                #'optimizer' : optimizer.state_dict(),
-            },filename=save_path)
-            print('saving!!!!')
-        
 
 def freeze_bn(model):
     for m in model.modules():
@@ -253,7 +224,12 @@ def freeze_bn(model):
             m.eval()
 
 
-def train(train_loader, semantic_data, model, criterion, optimizer, odr_optimizer, zsr_optimizer, epoch,is_fix):    
+def train(train_loader, semantic_data, model, criterion, optimizer, odr_optimizer, zsl_optimizer, epoch,is_fix):
+    ''' load semantic data'''
+    label_s =  torch.from_numpy(semantic_data['seen_class']).cuda(args.gpu).long()
+    label_t =  torch.from_numpy(semantic_data['unseen_class']).cuda(args.gpu).long()
+    sf =  torch.from_numpy(semantic_data['all_att']).cuda(args.gpu)
+    
     # switch to train mode
     model.train()
     if(is_fix):
@@ -267,8 +243,8 @@ def train(train_loader, semantic_data, model, criterion, optimizer, odr_optimize
         target = target.cuda(args.gpu, non_blocking=True)
 
         # compute output
-        logits,feats = model(input)
-        total_loss,L_odr,L_zsr, L_aux = criterion(target,logits)
+        logits,feats = model(input, sf)
+        total_loss,L_odr,L_zsl, L_aux = criterion(target,logits)
 
         # compute gradient and do SGD step
         if args.pretrained:
@@ -276,9 +252,9 @@ def train(train_loader, semantic_data, model, criterion, optimizer, odr_optimize
             L_odr.backward()
             odr_optimizer.step()
         
-            zsr_optimizer.zero_grad()
-            (L_zsr+L_aux).backward()
-            zsr_optimizer.step()
+            zsl_optimizer.zero_grad()
+            (L_zsl+L_aux).backward()
+            zsl_optimizer.step()
         else:
             optimizer.zero_grad()
             total_loss.backward()
@@ -286,8 +262,8 @@ def train(train_loader, semantic_data, model, criterion, optimizer, odr_optimize
         
         if i % args.print_freq == 0:
             print('Epoch: [{0}][{1}/{2}] loss:'.format
-                   (epoch, i, len(train_loader)),end='')
-            print('L_odr {:.4f} L_zsl {:.4f} L_aux {:.4f}'.format(L_odr.item(),L_zsr.item(),L_aux.item()))
+                   (epoch, i, len(train_loader)), end='')
+            print('L_odr {:.4f} L_zsl {:.4f} L_aux {:.4f}'.format(L_odr.item(),L_zsl.item(),L_aux.item()))
 
 def validate(val_loader1, val_loader2, semantic_data, model, criterion):
 
@@ -295,6 +271,9 @@ def validate(val_loader1, val_loader2, semantic_data, model, criterion):
     seen_c = semantic_data['seen_class']
     unseen_c = semantic_data['unseen_class']
     all_c = semantic_data['all_class']
+    label_s =  torch.from_numpy(seen_c).cuda(args.gpu).long()
+    label_t =  torch.from_numpy(unseen_c).cuda(args.gpu).long()
+    all_sf = torch.from_numpy(semantic_data['all_att']).cuda(args.gpu,non_blocking=True)
     
     # switch to evaluate mode
     model.eval()
@@ -307,7 +286,7 @@ def validate(val_loader1, val_loader2, semantic_data, model, criterion):
             target = target.cuda(args.gpu, non_blocking=True)
             
             # inference
-            logits,feats = model(input)
+            logits,feats = model(input,all_sf)
             odr_logit = logits[0].cpu().numpy()
             zsl_logit = logits[1].cpu().numpy()
             zsl_logit_s = zsl_logit.copy();zsl_logit_s[:,unseen_c]=-1
@@ -335,7 +314,7 @@ def validate(val_loader1, val_loader2, semantic_data, model, criterion):
             target = target.cuda(args.gpu, non_blocking=True)
 
             # inference
-            logits,feats = model(input)
+            logits,feats = model(input,all_sf)
             odr_logit = logits[0].cpu().numpy()
             zsl_logit = logits[1].cpu().numpy()
             zsl_logit_s = zsl_logit.copy();zsl_logit_s[:,unseen_c]=-1
@@ -366,13 +345,15 @@ def validate(val_loader1, val_loader2, semantic_data, model, criterion):
         UT = compute_class_accuracy_total(gt_t, zsl_pre_tA,unseen_c)
         H = 2*ST*UT/(ST+UT) 
         CLS = compute_class_accuracy_total(gt_s, odr_pre_s,seen_c)
+        S_acc = compute_domain_accuracy(zsl_pre_sA,seen_c)
+        U_acc = compute_domain_accuracy(zsl_pre_tA,unseen_c)
         
         H_opt,S_opt,U_opt,Ds_opt,Du_opt,tau = post_process(odr_prob, zsl_prob, gt, gt_s.shape[0], seen_c,unseen_c, args.data)
-        
-        print(' SS: {:.4f} UU: {:.4f} ST: {:.4f} UT: {:.4f} H: {:.4f}'
-              .format(SS,UU,ST,UT,H))
-        print('CLS {:.4f} S_opt: {:.4f} U_opt {:.4f} H_opt {:.4f} Ds_opt {:.4f} Du_opt {:.4f} tau {:.4f}'
-              .format(CLS, S_opt, U_opt,H_opt,Ds_opt,Du_opt,tau))
+	
+        print(' SS: {:.4f} UU: {:.4f} ST: {:.4f} UT: {:.4f} H: {:.4f} S_acc {:.4f} U_acc {:.4f}'
+              .format(SS,UU,ST,UT,H,S_acc,U_acc))
+        print('CLS {:.4f} S_opt: {:.4f} U_opt {:.4f} Ds_opt: {:.4f} Du_opt {:.4f} H_opt {:.4f} tau {:.4f}'
+              .format(CLS, S_opt, U_opt,Ds_opt, Du_opt, H_opt, tau))
               
         H = max(H,H_opt)
     return H

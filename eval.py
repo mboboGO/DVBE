@@ -1,4 +1,4 @@
-#from __future__ import print_function
+from __future__ import print_function
 import argparse
 import os
 import random
@@ -18,9 +18,12 @@ import torch.utils.data
 import torch.utils.data.distributed
 
 import sys
+sys.path.append('./vision')
 import torchvision.transforms as transforms
-import datasets
-import models
+from torchvision.transforms.img_proc import *
+import torchvision.datasets as datasets
+import torchvision.models as models
+
 from utils import *
 
 model_names = sorted(name for name in models.__dict__
@@ -35,7 +38,6 @@ parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet18',
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
-parser.add_argument('--backbone', default='resnet18', help='backbone')
 parser.add_argument('--save_path', '-s', metavar='SAVE', default='',
                     help='saving path')
 parser.add_argument('-j', '--workers', default=3, type=int, metavar='N',
@@ -49,8 +51,6 @@ parser.add_argument('-b', '--batch-size', default=256, type=int,
 parser.add_argument('--lr1', default=0.1, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--lr2', default=0.001, type=float,
-                    metavar='LR', help='initial learning rate')
-parser.add_argument('--epoch_decay', default=30, type=int,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
@@ -74,13 +74,14 @@ parser.add_argument('--gpu', default=None, type=int,
                     help='GPU id to use.')
 parser.add_argument('--is_fix', dest='is_fix', action='store_true',
                     help='is_fix.')
+parser.add_argument('--is_att', dest='is_att', action='store_true',
+                    help='is_att.')
+                       
+''' loss params '''
+parser.add_argument('--w_cls', dest='w_cls', default=1, type=float,
+                    help='loss weight for L_cls.')
 
-''' gcn'''
-parser.add_argument('--gcn_k', dest='gcn_k', default=0, type=int,
-                    help='k in gcn.')
-''' loss weights '''
-parser.add_argument('--alpha', default=0, type=float, help='alpha.')
-                    
+
 best_prec1 = 0
 
 
@@ -89,7 +90,6 @@ def main():
     args = parser.parse_args()
     print(args)
 
-    ''' save path '''
     if not os.path.exists(args.save_path):
         os.makedirs(args.save_path)
 
@@ -116,31 +116,23 @@ def main():
 
     ''' data load info '''
     data_info = h5py.File(os.path.join('./data',args.data,'data_info.h5'), 'r')
-    img_path = str(data_info['img_path'][...]).replace("b'",'').replace("'",'')
+    img_path = str(data_info['img_path'][...])
     nc = data_info['all_att'][...].shape[0]
     sf_size = data_info['all_att'][...].shape[1]
     semantic_data = {'seen_class':data_info['seen_class'][...],
                      'unseen_class': data_info['unseen_class'][...],
                      'all_class':np.arange(nc),
                      'all_att': data_info['all_att'][...]}
-    ''' load semantic data'''
-    args.num_classes = nc
-    args.sf_size = sf_size
-    args.sf = semantic_data['all_att']
     
-    # adj
-    adj = adj_matrix(args.sf,args.gcn_k)
-    args.adj=adj
-    print('adj',adj)
-    
-    ''' model building '''
+    # create model
+    params = {'num_classes':nc,'is_fix':args.is_fix, 'sf_size':sf_size, 'is_att':args.is_att}
     if args.pretrained:
         print("=> using pre-trained model '{}'".format(args.arch))
         best_prec1=0
-        model,criterion = models.__dict__[args.arch](pretrained=True,args=args)
+        model,criterion = models.__dict__[args.arch](pretrained=True,params=params)
     else:
         print("=> creating model '{}'".format(args.arch))
-        model,criterion = models.__dict__[args.arch](args=args)
+        model,criterion = models.__dict__[args.arch](params=params)
     print("=> is the backbone fixed: '{}'".format(args.is_fix))
 
     if args.gpu is not None:
@@ -156,19 +148,6 @@ def main():
             model = torch.nn.DataParallel(model).cuda()
     criterion = criterion.cuda(args.gpu)
 
-
-    
-    ''' optimizer '''
-    odr_params = [v for k, v in model.named_parameters() if 'odr_' in k]
-    zsr_params = [v for k, v in model.named_parameters() if 'zsr_' in k]
-
-    odr_optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, odr_params),
-                     args.lr1, momentum=args.momentum, weight_decay=args.weight_decay)
-    zsr_optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, zsr_params), args.lr2,
-                                betas=(0.5,0.999),weight_decay=args.weight_decay)
-                                
-    optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, model.parameters()),
-                     args.lr1, momentum=args.momentum, weight_decay=args.weight_decay)
 
     ''' optionally resume from a checkpoint'''
     if args.resume:
@@ -216,35 +195,8 @@ def main():
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
         
-    for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            train_sampler.set_epoch(epoch)
-        adjust_learning_rate(optimizer, odr_optimizer, zsr_optimizer, epoch)
-
-        # train for one epoch
-        train(train_loader,semantic_data, model, criterion, optimizer, odr_optimizer, zsr_optimizer, epoch,is_fix=args.is_fix)
-        
-        # evaluate on validation set
-        prec1 = validate(val_loader1, val_loader2, semantic_data, model, criterion)
-
-        # remember best prec@1 and save checkpoint
-        is_best = prec1 > best_prec1
-        best_prec1 = max(prec1, best_prec1)
-
-        # save model
-        if args.is_fix:
-            save_path = os.path.join(args.save_path,'fix.model')
-        else:
-            save_path = os.path.join(args.save_path,args.arch+('_{:.4f}.model').format(best_prec1))
-        if is_best:
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_prec1': best_prec1,
-                #'optimizer' : optimizer.state_dict(),
-            },filename=save_path)
-            print('saving!!!!')
+    # evaluate on validation set
+    prec1 = validate(train_loader, val_loader1, val_loader2, semantic_data, model, criterion)
         
 
 def freeze_bn(model):
@@ -253,129 +205,116 @@ def freeze_bn(model):
             m.eval()
 
 
-def train(train_loader, semantic_data, model, criterion, optimizer, odr_optimizer, zsr_optimizer, epoch,is_fix):    
-    # switch to train mode
-    model.train()
-    if(is_fix):
-        freeze_bn(model) 
-
-    end = time.time()
-    for i, (input, target) in enumerate(train_loader):
-        # measure data loading time
-        if args.gpu is not None:
-            input = input.cuda(args.gpu, non_blocking=True)
-        target = target.cuda(args.gpu, non_blocking=True)
-
-        # compute output
-        logits,feats = model(input)
-        total_loss,L_odr,L_zsr, L_aux = criterion(target,logits)
-
-        # compute gradient and do SGD step
-        if args.pretrained:
-            odr_optimizer.zero_grad()
-            L_odr.backward()
-            odr_optimizer.step()
-        
-            zsr_optimizer.zero_grad()
-            (L_zsr+L_aux).backward()
-            zsr_optimizer.step()
-        else:
-            optimizer.zero_grad()
-            total_loss.backward()
-            optimizer.step()
-        
-        if i % args.print_freq == 0:
-            print('Epoch: [{0}][{1}/{2}] loss:'.format
-                   (epoch, i, len(train_loader)),end='')
-            print('L_odr {:.4f} L_zsl {:.4f} L_aux {:.4f}'.format(L_odr.item(),L_zsr.item(),L_aux.item()))
-
-def validate(val_loader1, val_loader2, semantic_data, model, criterion):
+def validate(train_loader, val_loader1, val_loader2, semantic_data, model, criterion):
 
     ''' load semantic data'''
     seen_c = semantic_data['seen_class']
     unseen_c = semantic_data['unseen_class']
     all_c = semantic_data['all_class']
-    
+    label_s =  torch.from_numpy(seen_c).cuda(args.gpu).long()
+    label_t =  torch.from_numpy(unseen_c).cuda(args.gpu).long()
+    all_sf = torch.from_numpy(semantic_data['all_att']).cuda(args.gpu,non_blocking=True)
+   
+    h5_semantic_file = h5py.File('./data.h5', 'w') 
+
+    sf = semantic_data['all_att']
+    h5_semantic_file.create_dataset('sf', sf.shape,dtype=np.float32)
+    h5_semantic_file['sf'][...] = sf
+
+
     # switch to evaluate mode
     model.eval()
 
     with torch.no_grad():
         end = time.time()
-        for i, (input, target) in enumerate(val_loader1):
+        
+        for i, (input, target) in enumerate(train_loader):
             if args.gpu is not None:
                 input = input.cuda(args.gpu, non_blocking=True)
             target = target.cuda(args.gpu, non_blocking=True)
             
             # inference
-            logits,feats = model(input)
-            odr_logit = logits[0].cpu().numpy()
-            zsl_logit = logits[1].cpu().numpy()
-            zsl_logit_s = zsl_logit.copy();zsl_logit_s[:,unseen_c]=-1
-            zsl_logit_t = zsl_logit.copy();zsl_logit_t[:,seen_c]=-1
+            logits,feat  = model(input,all_sf)
+            v_feat = feat[0]
+            a_feat = feat[1]
+			
+            # evaluation
+            if(i==0):
+                gt_train = target.cpu().numpy()
+                feat_train = a_feat
+            else:
+                gt_train = np.hstack([gt_train,target.cpu().numpy()])
+                feat_train = np.vstack([feat_train,a_feat])
+
+            print(i)
+            
+            
+        for i, (input, target) in enumerate(val_loader1):
+            if args.gpu is not None:
+                input = input.cuda(args.gpu, non_blocking=True)
+            target = target.cuda(args.gpu, non_blocking=True)
+            
+           # inference
+            logits,feat  = model(input,all_sf)
+            v_feat = feat[0]
+            a_feat = feat[1]
 			
             # evaluation
             if(i==0):
                 gt_s = target.cpu().numpy()
-                odr_pre_s = np.argmax(odr_logit, axis=1)
-                odr_prob_s = softmax(odr_logit)
-                zsl_pre_sA = np.argmax(zsl_logit, axis=1)
-                zsl_pre_sS = np.argmax(zsl_logit_s, axis=1)
-                zsl_prob_s = softmax(zsl_logit_t)
+                feat_s = a_feat
             else:
                 gt_s = np.hstack([gt_s,target.cpu().numpy()])
-                odr_pre_s = np.hstack([odr_pre_s,np.argmax(odr_logit, axis=1)])
-                odr_prob_s = np.vstack([odr_prob_s,softmax(odr_logit)])
-                zsl_pre_sA = np.hstack([zsl_pre_sA,np.argmax(zsl_logit, axis=1)])
-                zsl_pre_sS = np.hstack([zsl_pre_sS,np.argmax(zsl_logit_s, axis=1)])
-                zsl_prob_s = np.vstack([zsl_prob_s,softmax(zsl_logit_t)])
+                feat_s = np.vstack([feat_s,a_feat])
 
+            print(i)
+            
+
+            print(i)
         for i, (input, target) in enumerate(val_loader2):
             if args.gpu is not None:
                 input = input.cuda(args.gpu, non_blocking=True)
             target = target.cuda(args.gpu, non_blocking=True)
-
-            # inference
-            logits,feats = model(input)
-            odr_logit = logits[0].cpu().numpy()
-            zsl_logit = logits[1].cpu().numpy()
-            zsl_logit_s = zsl_logit.copy();zsl_logit_s[:,unseen_c]=-1
-            zsl_logit_t = zsl_logit.copy();zsl_logit_t[:,seen_c]=-1
                 
+            # inference
+            logits,feat  = model(input,all_sf)
+            v_feat = feat[0]
+            a_feat = feat[1]
+			
+            # evaluation
             if(i==0):
                 gt_t = target.cpu().numpy()
-                odr_pre_t = np.argmax(odr_logit, axis=1)
-                odr_prob_t = softmax(odr_logit)
-                zsl_pre_tA = np.argmax(zsl_logit, axis=1)
-                zsl_pre_tT = np.argmax(zsl_logit_t, axis=1)
-                zsl_prob_t = softmax(zsl_logit_t)
+                feat_t = a_feat
             else:
                 gt_t = np.hstack([gt_t,target.cpu().numpy()])
-                odr_pre_t = np.hstack([odr_pre_t,np.argmax(odr_logit, axis=1)])
-                odr_prob_t = np.vstack([odr_prob_t,softmax(odr_logit)])
-                zsl_pre_tA = np.hstack([zsl_pre_tA,np.argmax(zsl_logit, axis=1)])
-                zsl_pre_tT = np.hstack([zsl_pre_tT,np.argmax(zsl_logit_t, axis=1)])
-                zsl_prob_t = np.vstack([zsl_prob_t,softmax(zsl_logit_t)])
-                
-        odr_prob = np.vstack([odr_prob_s,odr_prob_t])
-        zsl_prob = np.vstack([zsl_prob_s,zsl_prob_t])
-        gt = np.hstack([gt_s,gt_t])
-    
-        SS = compute_class_accuracy_total(gt_s, zsl_pre_sS,seen_c)
-        UU = compute_class_accuracy_total(gt_t, zsl_pre_tT,unseen_c)
-        ST = compute_class_accuracy_total(gt_s, zsl_pre_sA,seen_c)
-        UT = compute_class_accuracy_total(gt_t, zsl_pre_tA,unseen_c)
-        H = 2*ST*UT/(ST+UT) 
-        CLS = compute_class_accuracy_total(gt_s, odr_pre_s,seen_c)
-        
-        H_opt,S_opt,U_opt,Ds_opt,Du_opt,tau = post_process(odr_prob, zsl_prob, gt, gt_s.shape[0], seen_c,unseen_c, args.data)
-        
-        print(' SS: {:.4f} UU: {:.4f} ST: {:.4f} UT: {:.4f} H: {:.4f}'
-              .format(SS,UU,ST,UT,H))
-        print('CLS {:.4f} S_opt: {:.4f} U_opt {:.4f} H_opt {:.4f} Ds_opt {:.4f} Du_opt {:.4f} tau {:.4f}'
-              .format(CLS, S_opt, U_opt,H_opt,Ds_opt,Du_opt,tau))
-              
-        H = max(H,H_opt)
-    return H
+                feat_t = np.vstack([feat_t,a_feat])
+
+
+            print(i)
+
+ 
+        h5_semantic_file.create_dataset('gt_t',gt_t.shape,dtype=np.int32)
+        h5_semantic_file.create_dataset('unseen_c', unseen_c.shape,dtype=np.int32)
+        h5_semantic_file.create_dataset('gt_s',gt_s.shape,dtype=np.int32)
+        h5_semantic_file.create_dataset('seen_c', seen_c.shape,dtype=np.int32)
+        h5_semantic_file.create_dataset('feat_s', feat_s.shape,dtype=np.float32)
+        h5_semantic_file.create_dataset('feat_t', feat_t.shape,dtype=np.float32)
+        h5_semantic_file.create_dataset('gt_train',gt_train.shape,dtype=np.int32)
+        h5_semantic_file.create_dataset('feat_train', feat_train.shape,dtype=np.float32)   
+
+
+        h5_semantic_file['gt_t'][...] = gt_t
+        h5_semantic_file['unseen_c'][...] = unseen_c
+        h5_semantic_file['gt_s'][...] = gt_s
+        h5_semantic_file['seen_c'][...] = seen_c
+        h5_semantic_file['feat_s'][...] = feat_s
+        h5_semantic_file['feat_t'][...] = feat_t
+        h5_semantic_file['gt_train'][...] = gt_train
+        h5_semantic_file['feat_train'][...] = feat_train                 
+
+
+        h5_semantic_file.close()      
+
 
 
 def save_checkpoint(state, filename='checkpoint.pth.tar'):
@@ -384,15 +323,15 @@ def save_checkpoint(state, filename='checkpoint.pth.tar'):
 
 def adjust_learning_rate(optimizer, optimizer1, optimizer2 , epoch):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = args.lr1 * (0.1 ** (epoch // args.epoch_decay))
+    lr = args.lr1 * (0.1 ** (epoch // 30))
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
         
-    lr = args.lr1 * (0.1 ** (epoch // args.epoch_decay))
+    lr = args.lr1 * (0.1 ** (epoch // 30))
     for param_group in optimizer1.param_groups:
         param_group['lr'] = lr
         
-    lr = args.lr2 * (0.1 ** (epoch // args.epoch_decay))
+    lr = args.lr2 * (0.1 ** (epoch // 30))
     for param_group in optimizer2.param_groups:
         param_group['lr'] = lr
 

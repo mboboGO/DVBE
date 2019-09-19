@@ -9,7 +9,27 @@ import torch
 normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225])
                                  
-                                 
+               
+def adj_matrix(sf,gcn_k):
+    '''adj'''
+    norm = np.linalg.norm(sf,axis=1,keepdims=True)
+    sf = sf/np.tile(norm,(1,sf.shape[1]))
+    adj = np.dot(sf,sf.transpose(1,0))
+    adj_sort = np.argsort(adj,axis=1)
+    adj_sort = adj_sort[:,::-1]
+    t = adj[np.arange(adj.shape[0]),adj_sort[:,gcn_k]]
+    t = np.tile(t,(adj.shape[0],1)).transpose(1,0)
+    idx = np.where(adj<t)
+    adj[idx[0],idx[1]] = 0
+    # norm
+    rowsum = np.sum(adj,axis=1)
+    r_inv = np.power(rowsum, -1).flatten()
+    r_inv[np.isinf(r_inv)] = 0.
+    r_mat_inv = np.diag(r_inv)
+    adj = r_mat_inv.dot(adj)
+            
+    return adj
+                 
 def freeze_bn(model):
     for m in model.modules():
         if isinstance(m,nn.BatchNorm2d):

@@ -9,11 +9,10 @@ import models.densenet
 import models.senet
 from models.operations import *
 
-
 import re
 from torch.utils.model_zoo import load_url as load_state_dict_from_url
 
-__all__ = ['d2ve']
+__all__ = ['cap']
        
 def conv3x3(in_planes, out_planes, stride=1):
     """3x3 convolution with padding"""
@@ -106,7 +105,6 @@ class Model(nn.Module):
         sf_size = args.sf_size
         self.arch = args.backbone
         self.adj = torch.from_numpy(args.adj).cuda()
-        self.sf =  torch.from_numpy(args.sf).cuda()
         
         super(Model, self).__init__()
 
@@ -168,8 +166,6 @@ class Model(nn.Module):
         self.zsr_sem = nn.Sequential(
             nn.Linear(sf_size,1024),
             nn.LeakyReLU(),
-            #GraphConv(sf_size,1024,self.adj),
-            #GraphConv(1024,feat_dim,self.adj),
             nn.Linear(1024,feat_dim),
             nn.LeakyReLU(),
         )
@@ -202,7 +198,7 @@ class Model(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x, sf):
         # backbone
         x = self.conv1(x)
         x = self.bn1(x)
@@ -240,7 +236,7 @@ class Model(nn.Module):
         
         ''' ZSR Module '''
         zsr_x = self.zsr_proj(last_conv).view(last_conv.size(0),-1)
-        zsr_classifier = self.zsr_sem(self.sf)
+        zsr_classifier = self.zsr_sem(sf)
         w_norm = F.normalize(zsr_classifier, p=2, dim=1)
         x_norm = F.normalize(zsr_x, p=2, dim=1)
         zsr_logit = x_norm.mm(w_norm.permute(1,0))
@@ -252,8 +248,8 @@ class Loss(nn.Module):
     def __init__(self, args):
         super(Loss, self).__init__()
 		
-        self.cls_loss = nn.CrossEntropyLoss()#reduce=False)
-        self.gamma = args.alpha
+        self.cls_loss = nn.CrossEntropyLoss()
+        self.alpha = args.alpha
         
     def forward(self, label, logits):
         odr_logit = logits[0]
@@ -261,13 +257,7 @@ class Loss(nn.Module):
         zsr_logit_aux = logits[2]
         
         ''' ODR Loss '''
-        prob = F.softmax(odr_logit,dim=1).detach()
-        y = prob[torch.arange(prob.size(0)).long(),label]
-        mw = torch.exp(-(y-1.0)**2/0.25)
-        one_hot = torch.zeros_like(odr_logit)
-        one_hot.scatter_(1, label.view(-1, 1), 1)
-        odr_logit = odr_logit*(1-one_hot*mw.view(mw.size(0),1))
-        L_odr = self.cls_loss(odr_logit,label)#*((1-y)**self.gamma)
+        L_odr = self.cls_loss(odr_logit,label)
         
         ''' ZSL Loss '''
         idx = torch.arange(zsr_logit.size(0)).long()
@@ -277,9 +267,9 @@ class Loss(nn.Module):
         
         total_loss = L_odr + L_zsr + L_aux
 		
-        return total_loss,L_odr,L_zsr, L_aux
+        return total_loss,L_odr,L_zsr,L_aux
 		
-def d2ve(pretrained=False, loss_params=None, args=None):
+def cap(pretrained=False, loss_params=None, args=None):
     """Constructs a ResNet-101 model.
 
     Args:
