@@ -12,7 +12,7 @@ from models.operations import *
 import re
 from torch.utils.model_zoo import load_url as load_state_dict_from_url
 
-__all__ = ['base']
+__all__ = ['cap']
        
 def conv3x3(in_planes, out_planes, stride=1):
     """3x3 convolution with padding"""
@@ -103,9 +103,9 @@ class Model(nn.Module):
         num_classes = args.num_classes
         is_fix = args.is_fix
         sf_size = args.sf_size
-        self.is_att = True
         self.arch = args.backbone
         self.adj = torch.from_numpy(args.adj).cuda()
+        self.sf =  torch.from_numpy(args.sf).cuda()
         
         super(Model, self).__init__()
 
@@ -126,20 +126,36 @@ class Model(nn.Module):
             for p in self.parameters():
                 p.requires_grad=False
             
-                
         if 'densenet' in self.arch:
             feat_dim = 1920
         else:
             feat_dim = 2048
 
         ''' Open-Domain Recognition Module '''
-        self.odr_proj =  nn.Sequential(
-            nn.Conv2d(feat_dim, feat_dim, kernel_size=1, stride=1, padding=0,bias=False),
-            nn.BatchNorm2d(feat_dim),
+        self.odr_proj1 =  nn.Sequential(
+            nn.Conv2d(feat_dim, 256, kernel_size=1, stride=1, padding=0,bias=False),
+            nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
         )
-        self.avgpool = nn.AdaptiveAvgPool2d(1)
-        self.odr_classifier = nn.Linear(feat_dim, num_classes)
+        self.odr_proj2 =  nn.Sequential(
+            nn.Conv2d(feat_dim, 256, kernel_size=1, stride=1, padding=0,bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+        )
+        self.odr_spatial =  nn.Sequential(
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1,bias=False),
+            nn.ReLU(inplace=True),   
+            nn.Conv2d(256, 1, kernel_size=1, stride=1, padding=0,bias=False),
+            nn.Sigmoid(),        
+        )
+        self.odr_channel =  nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(256, int(256/16), kernel_size=1, stride=1, padding=0,bias=False),
+            nn.ReLU(inplace=True),   
+            nn.Conv2d(int(256/16), 256, kernel_size=1, stride=1, padding=0,bias=False),
+            nn.Sigmoid(),        
+        )
+        self.odr_classifier = nn.Linear(int(256*(256+1)/2), num_classes)
 
         ''' Zero-Shot Recognition Module '''
         self.zsr_proj = nn.Sequential(
@@ -183,7 +199,7 @@ class Model(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def forward(self, x, sf):
+    def forward(self, x):
         # backbone
         x = self.conv1(x)
         x = self.bn1(x)
@@ -197,13 +213,31 @@ class Model(nn.Module):
         last_conv = x
 		
         ''' ODR Module '''
-        x = self.odr_proj(last_conv)
-        odr_x = self.avgpool(x).view(x.size(0),-1)
+        x1 = self.odr_proj1(last_conv)
+        x2 = x1#self.odr_proj1(last_conv)
+        # att gen
+        att1 = self.odr_spatial(x1)
+        att2 = self.odr_channel(x2)
+        # att1
+        x1 = att2*x1+x1
+        x1 = x1.view(x1.size(0),x1.size(1),-1)
+        # att2
+        x2 = att1*x2+x2
+        x2 = x2.view(x2.size(0),x2.size(1),-1)
+        # covariance pooling
+        x1 = x1 - torch.mean(x1,dim=2,keepdim=True)
+        x2 = x2 - torch.mean(x2,dim=2,keepdim=True)
+        A = 1./x1.size(2)*x1.bmm(x2.transpose(1,2))
+        # norm
+        x = MPNCOV.SqrtmLayer(A, 5)
+        x = MPNCOV.TriuvecLayer(x)
+        odr_x = x.view(x.size(0), -1)
+        # cls
         odr_logit = self.odr_classifier(odr_x)
         
         ''' ZSR Module '''
         zsr_x = self.zsr_proj(last_conv).view(last_conv.size(0),-1)
-        zsr_classifier = self.zsr_sem(sf)
+        zsr_classifier = self.zsr_sem(self.sf)
         w_norm = F.normalize(zsr_classifier, p=2, dim=1)
         x_norm = F.normalize(zsr_x, p=2, dim=1)
         zsr_logit = x_norm.mm(w_norm.permute(1,0))
@@ -236,7 +270,7 @@ class Loss(nn.Module):
 		
         return total_loss,L_odr,L_zsr,L_aux
 		
-def base(pretrained=False, loss_params=None, args=None):
+def cap(pretrained=False, loss_params=None, args=None):
     """Constructs a ResNet-101 model.
 
     Args:

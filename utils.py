@@ -1,6 +1,6 @@
 import numpy as np
 import torch.nn as nn
-from sklearn.neighbors import KNeighborsClassifier
+#from sklearn.neighbors import KNeighborsClassifier
 
 
 import torchvision.transforms as transforms
@@ -153,6 +153,8 @@ def post_process(v_prob,a_prob,gt, split_num, seen_c,unseen_c,data):
         Ds = compute_domain_accuracy(pre_s,seen_c)
         Du = compute_domain_accuracy(pre_t,unseen_c)
         H = 2*S*U/(S+U) 
+        
+        print('S: {:.4f} U {:.4f} H {:.4f} Ds {:.4f} Du_{:.4f} tau {:.4f}'.format(S, U,H,Ds,Du,base))
          
         if H>opt_H:
              opt_S = S
