@@ -253,7 +253,6 @@ class Loss(nn.Module):
         super(Loss, self).__init__()
 		
         self.cls_loss = nn.CrossEntropyLoss()#reduce=False)
-        self.gamma = args.alpha
         
     def forward(self, label, logits):
         odr_logit = logits[0]
@@ -267,7 +266,7 @@ class Loss(nn.Module):
         one_hot = torch.zeros_like(odr_logit)
         one_hot.scatter_(1, label.view(-1, 1), 1)
         odr_logit = odr_logit*(1-one_hot*mw.view(mw.size(0),1))
-        L_odr = self.cls_loss(odr_logit,label)#*((1-y)**self.gamma)
+        L_odr = self.cls_loss(odr_logit,label)
         
         ''' ZSL Loss '''
         idx = torch.arange(zsr_logit.size(0)).long()

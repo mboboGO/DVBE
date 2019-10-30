@@ -78,8 +78,6 @@ parser.add_argument('--is_fix', dest='is_fix', action='store_true',
 ''' gcn'''
 parser.add_argument('--gcn_k', dest='gcn_k', default=0, type=int,
                     help='k in gcn.')
-''' loss weights '''
-parser.add_argument('--alpha', default=0, type=float, help='alpha.')
                     
 best_prec1 = 0
 
