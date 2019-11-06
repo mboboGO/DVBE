@@ -9,9 +9,9 @@ def save_cub_data():
     print('### Load CUB data')
     print('current path:',os.getcwd())
     ''' path setting '''
-    split_path = '/userhome/raw_data/zsl_data/CUB'
+    split_path = '/data/mbobo/zsl_data//CUB'
     save_data_path = checkdir(os.path.join('./cub'))
-    image_path = '/userhome/raw_data/CUB_200_2011/CUB_200_2011/images/'
+    image_path = '/data/mbobo/CUB/CUB_200_2011/images/'
 
     ''' read img&att '''
     att_data = io.loadmat(checkfile(os.path.join(split_path, 'att_splits.mat')))
@@ -43,7 +43,7 @@ def save_cub_data():
     h5_path = os.path.join(save_data_path, 'data_info.h5')
 
     if os.path.exists(h5_path):
-        print "Skip store semantic features."
+        print("Skip store semantic features.")
     else:
         h5_semantic_file = h5py.File(h5_path, 'w')
         # save classes split

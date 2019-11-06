@@ -253,7 +253,7 @@ class Loss(nn.Module):
         super(Loss, self).__init__()
 		
         self.cls_loss = nn.CrossEntropyLoss()#reduce=False)
-        
+        self.sigma = args.sigma
     def forward(self, label, logits):
         odr_logit = logits[0]
         zsr_logit = logits[1]
@@ -262,7 +262,7 @@ class Loss(nn.Module):
         ''' ODR Loss '''
         prob = F.softmax(odr_logit,dim=1).detach()
         y = prob[torch.arange(prob.size(0)).long(),label]
-        mw = torch.exp(-(y-1.0)**2/0.25)
+        mw = torch.exp(-(y-1.0)**2/self.sigma)
         one_hot = torch.zeros_like(odr_logit)
         one_hot.scatter_(1, label.view(-1, 1), 1)
         odr_logit = odr_logit*(1-one_hot*mw.view(mw.size(0),1))
@@ -289,7 +289,7 @@ def d2ve(pretrained=False, loss_params=None, args=None):
     if pretrained:
         model_dict = model.state_dict()
         #pretrained_dict = model_zoo.load_url(model_urls['resnet101'])
-        pretrained_dict = torch.load('./pretrained/resnet101-5d3b4d8f.pth')
+        pretrained_dict = torch.load('/model/mbobo/resnet101-5d3b4d8f/resnet101-5d3b4d8f.pth')
         pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
         model_dict.update(pretrained_dict)
         model.load_state_dict(model_dict)

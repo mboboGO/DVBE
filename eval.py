@@ -83,6 +83,7 @@ parser.add_argument('--gcn_k', dest='gcn_k', default=0, type=int,
 parser.add_argument('--sigma', dest='sigma', default=0.5, type=int,
                     help='sigma.')
                                
+                    
 best_prec1 = 0
 
 
@@ -90,10 +91,6 @@ def main():
     global args, best_prec1
     args = parser.parse_args()
     print(args)
-
-    ''' save path '''
-    if not os.path.exists(args.save_path):
-        os.makedirs(args.save_path)
 
     ''' random seed '''
     if args.seed is not None:
@@ -136,6 +133,7 @@ def main():
     print('adj',adj)
     
     ''' model building '''
+    args.is_fix = True
     if args.pretrained:
         print("=> using pre-trained model '{}'".format(args.arch))
         best_prec1=0
@@ -156,21 +154,6 @@ def main():
             model.cuda()
         else:
             model = torch.nn.DataParallel(model).cuda()
-    criterion = criterion.cuda(args.gpu)
-
-
-    
-    ''' optimizer '''
-    odr_params = [v for k, v in model.named_parameters() if 'odr_' in k]
-    zsr_params = [v for k, v in model.named_parameters() if 'zsr_' in k]
-
-    odr_optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, odr_params),
-                     args.lr1, momentum=args.momentum, weight_decay=args.weight_decay)
-    zsr_optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, zsr_params), args.lr2,
-                                betas=(0.5,0.999),weight_decay=args.weight_decay)
-                                
-    optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, model.parameters()),
-                     args.lr1, momentum=args.momentum, weight_decay=args.weight_decay)
 
     ''' optionally resume from a checkpoint'''
     if args.resume:
@@ -218,37 +201,8 @@ def main():
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
         
-    for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            train_sampler.set_epoch(epoch)
-        adjust_learning_rate(optimizer, odr_optimizer, zsr_optimizer, epoch)
-
-        # train for one epoch
-        train(train_loader,semantic_data, model, criterion, optimizer, odr_optimizer, zsr_optimizer, epoch,is_fix=args.is_fix)
-        
-        # evaluate on validation set
-        prec1 = validate(val_loader1, val_loader2, semantic_data, model, criterion)
-
-        # remember best prec@1 and save checkpoint
-        is_best = prec1 > best_prec1
-        best_prec1 = max(prec1, best_prec1)
-
-        # save model
-        if args.is_fix:
-            save_path = os.path.join(args.save_path,'fix.model')
-        else:
-            save_path = os.path.join(args.save_path,args.arch+('_{:.4f}.model').format(best_prec1))
-        if is_best:
-            '''
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_prec1': best_prec1,
-                #'optimizer' : optimizer.state_dict(),
-            },filename=save_path)
-            '''
-            print('saving!!!!')
+    # evaluate on validation set
+    prec1 = validate(train_loader, val_loader2, semantic_data, model, criterion)
         
 
 def freeze_bn(model):
@@ -256,52 +210,19 @@ def freeze_bn(model):
         if isinstance(m,nn.BatchNorm2d):
             m.eval()
 
-
-def train(train_loader, semantic_data, model, criterion, optimizer, odr_optimizer, zsr_optimizer, epoch,is_fix):    
-    # switch to train mode
-    model.train()
-    if(is_fix):
-        freeze_bn(model) 
-
-    end = time.time()
-    for i, (input, target) in enumerate(train_loader):
-        # measure data loading time
-        if args.gpu is not None:
-            input = input.cuda(args.gpu, non_blocking=True)
-        target = target.cuda(args.gpu, non_blocking=True)
-
-        # compute output
-        logits,feats = model(input)
-        total_loss,L_odr,L_zsr, L_aux = criterion(target,logits)
-
-        # compute gradient and do SGD step
-        if args.pretrained:
-            odr_optimizer.zero_grad()
-            L_odr.backward()
-            odr_optimizer.step()
-        
-            zsr_optimizer.zero_grad()
-            (L_zsr+L_aux).backward()
-            zsr_optimizer.step()
-        else:
-            optimizer.zero_grad()
-            total_loss.backward()
-            optimizer.step()
-        
-        if i % args.print_freq == 0:
-            print('Epoch: [{0}][{1}/{2}] loss:'.format
-                   (epoch, i, len(train_loader)),end='')
-            print('L_odr {:.4f} L_zsl {:.4f} L_aux {:.4f}'.format(L_odr.item(),L_zsr.item(),L_aux.item()))
-
 def validate(val_loader1, val_loader2, semantic_data, model, criterion):
 
     ''' load semantic data'''
     seen_c = semantic_data['seen_class']
     unseen_c = semantic_data['unseen_class']
     all_c = semantic_data['all_class']
-    
+    all_att = semantic_data['all_att']
+    print('aaaaa',(all_att[5,:]*all_att[6,:]).sum())
     # switch to evaluate mode
     model.eval()
+    
+    print(seen_c)
+    print(unseen_c)
 
     with torch.no_grad():
         end = time.time()
@@ -312,26 +233,27 @@ def validate(val_loader1, val_loader2, semantic_data, model, criterion):
             
             # inference
             logits,feats = model(input)
-            odr_logit = logits[0].cpu().numpy()
+            ams_logit = logits[0].cpu().numpy()
             zsl_logit = logits[1].cpu().numpy()
             zsl_logit_s = zsl_logit.copy();zsl_logit_s[:,unseen_c]=-1
             zsl_logit_t = zsl_logit.copy();zsl_logit_t[:,seen_c]=-1
+            
 			
             # evaluation
             if(i==0):
                 gt_s = target.cpu().numpy()
-                odr_pre_s = np.argmax(odr_logit, axis=1)
-                odr_prob_s = softmax(odr_logit)
-                zsl_pre_sA = np.argmax(zsl_logit, axis=1)
-                zsl_pre_sS = np.argmax(zsl_logit_s, axis=1)
+                ams_pre_s = np.argmax(ams_logit, axis=1)
+                ams_prob_s = softmax(ams_logit)
+                zsl_pre_s = np.argmax(zsl_logit_t, axis=1)
                 zsl_prob_s = softmax(zsl_logit_t)
             else:
                 gt_s = np.hstack([gt_s,target.cpu().numpy()])
-                odr_pre_s = np.hstack([odr_pre_s,np.argmax(odr_logit, axis=1)])
-                odr_prob_s = np.vstack([odr_prob_s,softmax(odr_logit)])
-                zsl_pre_sA = np.hstack([zsl_pre_sA,np.argmax(zsl_logit, axis=1)])
-                zsl_pre_sS = np.hstack([zsl_pre_sS,np.argmax(zsl_logit_s, axis=1)])
-                zsl_prob_s = np.vstack([zsl_prob_s,softmax(zsl_logit_t)])
+                ams_pre_s = np.hstack([ams_pre_s,np.argmax(ams_logit, axis=1)])
+                ams_prob_s = np.vstack([ams_prob_s,softmax(ams_logit)])
+                            
+            
+            print('{}/{}'.format(i,len(val_loader1)))
+            
 
         for i, (input, target) in enumerate(val_loader2):
             if args.gpu is not None:
@@ -340,47 +262,31 @@ def validate(val_loader1, val_loader2, semantic_data, model, criterion):
 
             # inference
             logits,feats = model(input)
-            odr_logit = logits[0].cpu().numpy()
+            ams_logit = logits[0].cpu().numpy()
             zsl_logit = logits[1].cpu().numpy()
             zsl_logit_s = zsl_logit.copy();zsl_logit_s[:,unseen_c]=-1
             zsl_logit_t = zsl_logit.copy();zsl_logit_t[:,seen_c]=-1
+            
                 
             if(i==0):
                 gt_t = target.cpu().numpy()
-                odr_pre_t = np.argmax(odr_logit, axis=1)
-                odr_prob_t = softmax(odr_logit)
-                zsl_pre_tA = np.argmax(zsl_logit, axis=1)
-                zsl_pre_tT = np.argmax(zsl_logit_t, axis=1)
-                zsl_prob_t = softmax(zsl_logit_t)
+                ams_pre_t = np.argmax(ams_logit, axis=1)
+                ams_prob_t = softmax(ams_logit)
             else:
                 gt_t = np.hstack([gt_t,target.cpu().numpy()])
-                odr_pre_t = np.hstack([odr_pre_t,np.argmax(odr_logit, axis=1)])
-                odr_prob_t = np.vstack([odr_prob_t,softmax(odr_logit)])
-                zsl_pre_tA = np.hstack([zsl_pre_tA,np.argmax(zsl_logit, axis=1)])
-                zsl_pre_tT = np.hstack([zsl_pre_tT,np.argmax(zsl_logit_t, axis=1)])
-                zsl_prob_t = np.vstack([zsl_prob_t,softmax(zsl_logit_t)])
+                ams_pre_t = np.hstack([ams_pre_t,np.argmax(ams_logit, axis=1)])
+                ams_prob_t = np.vstack([ams_prob_t,softmax(ams_logit)])
                 
-        odr_prob = np.vstack([odr_prob_s,odr_prob_t])
-        zsl_prob = np.vstack([zsl_prob_s,zsl_prob_t])
-        gt = np.hstack([gt_s,gt_t])
-    
-        SS = compute_class_accuracy_total(gt_s, zsl_pre_sS,seen_c)
-        UU = compute_class_accuracy_total(gt_t, zsl_pre_tT,unseen_c)
-        ST = compute_class_accuracy_total(gt_s, zsl_pre_sA,seen_c)
-        UT = compute_class_accuracy_total(gt_t, zsl_pre_tA,unseen_c)
-        H = 2*ST*UT/(ST+UT) 
-        CLS = compute_class_accuracy_total(gt_s, odr_pre_s,seen_c)
-        
-        H_opt,S_opt,U_opt,Ds_opt,Du_opt,tau = post_process(odr_prob, zsl_prob, gt, gt_s.shape[0], seen_c,unseen_c, args.data)
-        
-        print(' SS: {:.4f} UU: {:.4f} ST: {:.4f} UT: {:.4f} H: {:.4f}'
-              .format(SS,UU,ST,UT,H))
-        print('CLS {:.4f} S_opt: {:.4f} U_opt {:.4f} H_opt {:.4f} Ds_opt {:.4f} Du_opt {:.4f} tau {:.4f}'
-              .format(CLS, S_opt, U_opt,H_opt,Ds_opt,Du_opt,tau))
-              
-        H = max(H,H_opt)
-    return H
 
+            print('{}/{}'.format(i,len(val_loader2)))
+                
+        f = h5py.File('./data.h5', 'w')
+        f.create_dataset('ams_pre_s', ams_pre_s.shape,dtype=ams_pre_s.dtype)
+        f.create_dataset('ams_pre_t', ams_pre_t.shape,dtype=ams_pre_t.dtype)
+        f['ams_pre_s'][...] = ams_pre_s
+        f['ams_pre_s'][...] = ams_pre_s
+        f.close()
+    return H
 
 def save_checkpoint(state, filename='checkpoint.pth.tar'):
     torch.save(state, filename)

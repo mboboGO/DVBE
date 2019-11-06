@@ -1,0 +1,8 @@
+MODEL=d2ve
+DATA=cub
+BACKBONE=resnet101
+
+nvidia-smi
+
+python eval.py --backbone ${BACKBONE} --name ${MODEL} --lr 0.007 --workers 4 --epochs 90 --batch-size 24 --gpu-ids 0,1 --dataset ${DATA} --resume ./0.4891.model
+
