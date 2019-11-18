@@ -80,7 +80,7 @@ parser.add_argument('--gcn_k', dest='gcn_k', default=0, type=int,
                     help='k in gcn.')
                     
 ''' loss '''
-parser.add_argument('--sigma', dest='sigma', default=0.5, type=int,
+parser.add_argument('--sigma', dest='sigma', default=0.5, type=float,
                     help='sigma.')
                                
 best_prec1 = 0

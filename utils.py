@@ -139,7 +139,7 @@ def post_process(v_prob,a_prob,gt, split_num, seen_c,unseen_c,data):
         tau = -base* np.log(base)
         pre = v_pre
         for idx,class_i in enumerate(pre):
-            if data in ['aaa']:
+            if data in ['cub']:
                 if(H_v[idx]-tau>0):
                     pre[idx] = a_pre[idx]
             elif data in ['cub','awa2','apy','sun']:

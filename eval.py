@@ -233,27 +233,26 @@ def validate(val_loader1, val_loader2, semantic_data, model, criterion):
             
             # inference
             logits,feats = model(input)
-            ams_logit = logits[0].cpu().numpy()
+            odr_logit = logits[0].cpu().numpy()
             zsl_logit = logits[1].cpu().numpy()
             zsl_logit_s = zsl_logit.copy();zsl_logit_s[:,unseen_c]=-1
             zsl_logit_t = zsl_logit.copy();zsl_logit_t[:,seen_c]=-1
-            
 			
             # evaluation
             if(i==0):
                 gt_s = target.cpu().numpy()
-                ams_pre_s = np.argmax(ams_logit, axis=1)
-                ams_prob_s = softmax(ams_logit)
-                zsl_pre_s = np.argmax(zsl_logit_t, axis=1)
+                odr_pre_s = np.argmax(odr_logit, axis=1)
+                odr_prob_s = softmax(odr_logit)
+                zsl_pre_sA = np.argmax(zsl_logit, axis=1)
+                zsl_pre_sS = np.argmax(zsl_logit_s, axis=1)
                 zsl_prob_s = softmax(zsl_logit_t)
             else:
                 gt_s = np.hstack([gt_s,target.cpu().numpy()])
-                ams_pre_s = np.hstack([ams_pre_s,np.argmax(ams_logit, axis=1)])
-                ams_prob_s = np.vstack([ams_prob_s,softmax(ams_logit)])
-                            
-            
-            print('{}/{}'.format(i,len(val_loader1)))
-            
+                odr_pre_s = np.hstack([odr_pre_s,np.argmax(odr_logit, axis=1)])
+                odr_prob_s = np.vstack([odr_prob_s,softmax(odr_logit)])
+                zsl_pre_sA = np.hstack([zsl_pre_sA,np.argmax(zsl_logit, axis=1)])
+                zsl_pre_sS = np.hstack([zsl_pre_sS,np.argmax(zsl_logit_s, axis=1)])
+                zsl_prob_s = np.vstack([zsl_prob_s,softmax(zsl_logit_t)])
 
         for i, (input, target) in enumerate(val_loader2):
             if args.gpu is not None:
@@ -262,30 +261,45 @@ def validate(val_loader1, val_loader2, semantic_data, model, criterion):
 
             # inference
             logits,feats = model(input)
-            ams_logit = logits[0].cpu().numpy()
+            odr_logit = logits[0].cpu().numpy()
             zsl_logit = logits[1].cpu().numpy()
             zsl_logit_s = zsl_logit.copy();zsl_logit_s[:,unseen_c]=-1
             zsl_logit_t = zsl_logit.copy();zsl_logit_t[:,seen_c]=-1
-            
                 
             if(i==0):
                 gt_t = target.cpu().numpy()
-                ams_pre_t = np.argmax(ams_logit, axis=1)
-                ams_prob_t = softmax(ams_logit)
+                odr_pre_t = np.argmax(odr_logit, axis=1)
+                odr_prob_t = softmax(odr_logit)
+                zsl_pre_tA = np.argmax(zsl_logit, axis=1)
+                zsl_pre_tT = np.argmax(zsl_logit_t, axis=1)
+                zsl_prob_t = softmax(zsl_logit_t)
             else:
                 gt_t = np.hstack([gt_t,target.cpu().numpy()])
-                ams_pre_t = np.hstack([ams_pre_t,np.argmax(ams_logit, axis=1)])
-                ams_prob_t = np.vstack([ams_prob_t,softmax(ams_logit)])
+                odr_pre_t = np.hstack([odr_pre_t,np.argmax(odr_logit, axis=1)])
+                odr_prob_t = np.vstack([odr_prob_t,softmax(odr_logit)])
+                zsl_pre_tA = np.hstack([zsl_pre_tA,np.argmax(zsl_logit, axis=1)])
+                zsl_pre_tT = np.hstack([zsl_pre_tT,np.argmax(zsl_logit_t, axis=1)])
+                zsl_prob_t = np.vstack([zsl_prob_t,softmax(zsl_logit_t)])
                 
-
-            print('{}/{}'.format(i,len(val_loader2)))
-                
-        f = h5py.File('./data.h5', 'w')
-        f.create_dataset('ams_pre_s', ams_pre_s.shape,dtype=ams_pre_s.dtype)
-        f.create_dataset('ams_pre_t', ams_pre_t.shape,dtype=ams_pre_t.dtype)
-        f['ams_pre_s'][...] = ams_pre_s
-        f['ams_pre_s'][...] = ams_pre_s
-        f.close()
+        odr_prob = np.vstack([odr_prob_s,odr_prob_t])
+        zsl_prob = np.vstack([zsl_prob_s,zsl_prob_t])
+        gt = np.hstack([gt_s,gt_t])
+    
+        SS = compute_class_accuracy_total(gt_s, zsl_pre_sS,seen_c)
+        UU = compute_class_accuracy_total(gt_t, zsl_pre_tT,unseen_c)
+        ST = compute_class_accuracy_total(gt_s, zsl_pre_sA,seen_c)
+        UT = compute_class_accuracy_total(gt_t, zsl_pre_tA,unseen_c)
+        H = 2*ST*UT/(ST+UT) 
+        CLS = compute_class_accuracy_total(gt_s, odr_pre_s,seen_c)
+        
+        H_opt,S_opt,U_opt,Ds_opt,Du_opt,tau = post_process(odr_prob, zsl_prob, gt, gt_s.shape[0], seen_c,unseen_c, args.data)
+        
+        print(' SS: {:.4f} UU: {:.4f} ST: {:.4f} UT: {:.4f} H: {:.4f}'
+              .format(SS,UU,ST,UT,H))
+        print('CLS {:.4f} S_opt: {:.4f} U_opt {:.4f} H_opt {:.4f} Ds_opt {:.4f} Du_opt {:.4f} tau {:.4f}'
+              .format(CLS, S_opt, U_opt,H_opt,Ds_opt,Du_opt,tau))
+              
+        H = max(H,H_opt)
     return H
 
 def save_checkpoint(state, filename='checkpoint.pth.tar'):
