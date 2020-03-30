@@ -3,7 +3,7 @@ This is an implementation for DVBE, which has been accepted by CVPR2020.
 
 ## Introduction
 
-This project is a pytorch implementation of [*Domain-Specific Embedding Network for Zero-Shot Recognition *], ACMMM 2019. 
+This project is a pytorch implementation of. 
 Code will be orgnized soon in recent days.
 
 ## Requirements
