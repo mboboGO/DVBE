@@ -1,5 +1,6 @@
 import numpy as np
 import torch.nn as nn
+import scipy.sparse as sp
 #from sklearn.neighbors import KNeighborsClassifier
 
 
@@ -10,31 +11,43 @@ normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225])
                                  
                
-def adj_matrix(sf,gcn_k):
-    '''adj'''
-    norm = np.linalg.norm(sf,axis=1,keepdims=True)
-    sf = sf/np.tile(norm,(1,sf.shape[1]))
-    adj = np.dot(sf,sf.transpose(1,0))
-    adj_sort = np.argsort(adj,axis=1)
-    adj_sort = adj_sort[:,::-1]
-    t = adj[np.arange(adj.shape[0]),adj_sort[:,gcn_k]]
-    t = np.tile(t,(adj.shape[0],1)).transpose(1,0)
-    idx = np.where(adj<t)
-    adj[idx[0],idx[1]] = 0
-    # norm
-    rowsum = np.sum(adj,axis=1)
-    r_inv = np.power(rowsum, -1).flatten()
-    r_inv[np.isinf(r_inv)] = 0.
-    r_mat_inv = np.diag(r_inv)
-    adj = r_mat_inv.dot(adj)
-            
+def normt_spm(mx, method='in'):
+    if method == 'in':
+        mx = mx.transpose()
+        rowsum = np.array(mx.sum(1))
+        r_inv = np.power(rowsum, -1).flatten()
+        r_inv[np.isinf(r_inv)] = 0.
+        r_mat_inv = sp.diags(r_inv)
+        mx = r_mat_inv.dot(mx)
+        return mx
+    
+    if method == 'sym':
+        rowsum = np.array(mx.sum(1))
+        r_inv = np.power(rowsum, -0.5).flatten()
+        r_inv[np.isinf(r_inv)] = 0.
+        r_mat_inv = sp.diags(r_inv)
+        mx = mx.dot(r_mat_inv).transpose().dot(r_mat_inv)
+        return mx
+    
+def spm_to_tensor(sparse_mx):
+    sparse_mx = sparse_mx.tocoo().astype(np.float32)
+    indices = torch.from_numpy(np.vstack(
+            (sparse_mx.row, sparse_mx.col))).long()
+    values = torch.from_numpy(sparse_mx.data)
+    shape = torch.Size(sparse_mx.shape)
+    return torch.sparse.FloatTensor(indices, values, shape)
+    
+def adj_matrix(nc):
+    adj = sp.coo_matrix((np.ones(nc), (range(nc), range(nc))),shape=(nc, nc), dtype='float32')
+    adj = normt_spm(adj, method='in')
+    adj = spm_to_tensor(adj)
     return adj
-                 
+    
 def freeze_bn(model):
     for m in model.modules():
         if isinstance(m,nn.BatchNorm2d):
             m.eval()
-            
+    
 def get_RANK(query_semantic, test_mask, classes):
     query_semantic = query_semantic.cpu().numpy()
     test_mask = test_mask.cpu().numpy()
@@ -208,3 +221,28 @@ def preprocess_strategy(dataset):
     
 def count_parameters_in_MB(model):
     return np.sum(np.prod(v.size()) for name, v in model.named_parameters() if "auxiliary" not in name)/1e6
+    
+    
+    
+def save_checkpoint(state, filename='checkpoint.pth.tar'):
+    torch.save(state, filename)
+
+
+def adjust_learning_rate(optimizer, optimizer1, optimizer2 , epoch):
+    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
+    lr = args.lr1 * (0.1 ** (epoch // args.epoch_decay))
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+        
+    lr = args.lr1 * (0.1 ** (epoch // args.epoch_decay))
+    for param_group in optimizer1.param_groups:
+        param_group['lr'] = lr
+        
+    lr = args.lr2 * (0.1 ** (epoch // args.epoch_decay))
+    for param_group in optimizer2.param_groups:
+        param_group['lr'] = lr
+        
+def freeze_bn(model):
+    for m in model.modules():
+        if isinstance(m,nn.BatchNorm2d):
+            m.eval()

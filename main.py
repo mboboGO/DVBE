@@ -118,7 +118,7 @@ def main():
 
     ''' data load info '''
     data_info = h5py.File(os.path.join('./data',args.data,'data_info.h5'), 'r')
-    img_path = str(data_info['img_path'][...]).replace("b'",'').replace("'",'')
+    #img_path = str(data_info['img_path'][...]).replace("b'",'').replace("'",'')
     nc = data_info['all_att'][...].shape[0]
     sf_size = data_info['all_att'][...].shape[1]
     semantic_data = {'seen_class':data_info['seen_class'][...],
@@ -129,12 +129,10 @@ def main():
     args.num_classes = nc
     args.sf_size = sf_size
     args.sf = semantic_data['all_att']
-    
     # adj
-    adj = adj_matrix(args.sf,args.gcn_k)
-    args.adj=adj
-    print('adj',adj)
-    
+    adj = adj_matrix(nc)
+    args.adj = adj
+
     ''' model building '''
     if args.pretrained:
         print("=> using pre-trained model '{}'".format(args.arch))
@@ -159,7 +157,6 @@ def main():
     criterion = criterion.cuda(args.gpu)
 
 
-    
     ''' optimizer '''
     odr_params = [v for k, v in model.named_parameters() if 'odr_' in k]
     zsr_params = [v for k, v in model.named_parameters() if 'zsr_' in k]
@@ -191,6 +188,11 @@ def main():
     cudnn.benchmark = True
 
     # Data loading code
+    if args.data.lower()=='cub':
+        img_path = '/data/mbobo/CUB/CUB_200_2011/images/'
+    elif args.data.lower()=='awa2':
+        img_path = '~~~/Animals_with_Attributes2/JPEGImages/'
+        
     traindir = os.path.join('./data',args.data,'train.list')
     valdir1 = os.path.join('./data',args.data,'test_seen.list')
     valdir2 = os.path.join('./data',args.data,'test_unseen.list')
@@ -239,7 +241,6 @@ def main():
         else:
             save_path = os.path.join(args.save_path,args.arch+('_{:.4f}.model').format(best_prec1))
         if is_best:
-            '''
             save_checkpoint({
                 'epoch': epoch + 1,
                 'arch': args.arch,
@@ -247,14 +248,7 @@ def main():
                 'best_prec1': best_prec1,
                 #'optimizer' : optimizer.state_dict(),
             },filename=save_path)
-            '''
             print('saving!!!!')
-        
-
-def freeze_bn(model):
-    for m in model.modules():
-        if isinstance(m,nn.BatchNorm2d):
-            m.eval()
 
 
 def train(train_loader, semantic_data, model, criterion, optimizer, odr_optimizer, zsr_optimizer, epoch,is_fix):    
@@ -381,24 +375,6 @@ def validate(val_loader1, val_loader2, semantic_data, model, criterion):
         H = max(H,H_opt)
     return H
 
-
-def save_checkpoint(state, filename='checkpoint.pth.tar'):
-    torch.save(state, filename)
-
-
-def adjust_learning_rate(optimizer, optimizer1, optimizer2 , epoch):
-    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = args.lr1 * (0.1 ** (epoch // args.epoch_decay))
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
-        
-    lr = args.lr1 * (0.1 ** (epoch // args.epoch_decay))
-    for param_group in optimizer1.param_groups:
-        param_group['lr'] = lr
-        
-    lr = args.lr2 * (0.1 ** (epoch // args.epoch_decay))
-    for param_group in optimizer2.param_groups:
-        param_group['lr'] = lr
 
 if __name__ == '__main__':
     main()

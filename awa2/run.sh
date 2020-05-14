@@ -1,12 +1,10 @@
 #!/bin/bash
 cd ..
-export PYTHONPATH="/userhome/codes/D2VE/vision/":$PYTHONPATH
 
-
-MODEL=d2ve
+MODEL=dvbe
 DATA=awa2
 BACKBONE=resnet101
-SAVE_PATH=./${DATA}/checkpoints/${MODEL}
+SAVE_PATH=/output
 
 mkdir -p ${SAVE_PATH}
 

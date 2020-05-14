@@ -1,10 +1,12 @@
 # DVBE
-This is an implementation for DVBE, which has been accepted by CVPR2020.
+This is an implementation for Domain-aware Visual Bias Eliminating for Generalized Zero-Shot Learning[https://arxiv.org/pdf/2003.13261], which has been accepted by CVPR2020.
+DVBE is a new state-of-the-art method for generalized zero-shot learning.
 
 ## Introduction
-
-This project is a pytorch implementation of. 
-Code will be orgnized soon in recent days.
+This project is a basic implementation of DVBE by pytorch platform.
+To do:
+1. adding the autoML part.
+2. publishing the segmentation version.
 
 ## Requirements
 
@@ -20,37 +22,30 @@ Code will be orgnized soon in recent days.
 
 ## Datasets Prepare
 
-1. Download correspond dataset to folder your ${PATH}
+1. Download correspond dataset, e.g., CUB, AWA2, aPY, and SUN. Assume your data path is ${PATH}.
 
-2. Creat yout dataset:
-    e.g. for CUB in repository:
-
-    ```shell
-    cd ./data
-	python cub.py
-    ```
-
-The examples of datasets CUB, SUN, AWA2, and aPY are already given in our repository. You should modify some path in corresponding files.
+2. Changing the data path around the line 190 of main.py, according to your ${PATH}.
 
 ## Two-stage Training
+The training examples for the four datasets have been given in ./cub, ./awa2, ./apy, and ./sun.
+The training processing of DVBE consists of two stages, which is:
 
 1. Run `train.py` to train DSEN with fixed backbone
 
 	e.g. for training CUB 
 
 	```shell
-	python train.py -a dsen -d cub -s ./chechpoints/ \
-					-b 128 --pretrained --is_fix
+	python main.py -a dvbe -d cub -s /output --backbone resnet101 -b 128 
+					--pretrained --is_fix
 	```
 
 2. Finetune the whole DSEN
 
 	e.g. for training CUB
 	```shell
-	python train.py -a dsen -d cub -s ./chechpoints/ \
-					-b 16 --alpha 0.001 --lr 0.001 \
+	python main.py -a dvbe -d cub -s /output --backbone resnet101
+					-b 16 --lr 0.001 \
 					--epoch 180 --resume ./checkpoints/fix.model
 	```
 
-The official training shell for the four datasets are soon provided! \
 The reimplementation results and models are soon provided!

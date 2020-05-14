@@ -1,12 +1,10 @@
 #!/bin/bash
 cd ..
-export PYTHONPATH="/userhome/codes/D2VE/vision/":$PYTHONPATH
 
-
-MODEL=d2ve
+MODEL=dvbe
 DATA=apy
 BACKBONE=resnet101
-SAVE_PATH=./${DATA}/checkpoints/${MODEL}
+SAVE_PATH=/output
 mkdir -p ${SAVE_PATH}
 
 python main.py -a ${MODEL} -d ${DATA} -s ${SAVE_PATH} --backbone ${BACKBONE} -b 128 --lr1 0.001 --pretrained --is_fix &> ${SAVE_PATH}/fix.log

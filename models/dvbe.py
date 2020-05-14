@@ -13,7 +13,7 @@ from models.operations import *
 import re
 from torch.utils.model_zoo import load_url as load_state_dict_from_url
 
-__all__ = ['d2ve']
+__all__ = ['dvbe']
        
 def conv3x3(in_planes, out_planes, stride=1):
     """3x3 convolution with padding"""
@@ -105,7 +105,7 @@ class Model(nn.Module):
         is_fix = args.is_fix
         sf_size = args.sf_size
         self.arch = args.backbone
-        self.adj = torch.from_numpy(args.adj).cuda()
+        self.adj = args.adj
         self.sf =  torch.from_numpy(args.sf).cuda()
         
         super(Model, self).__init__()
@@ -278,7 +278,7 @@ class Loss(nn.Module):
 		
         return total_loss,L_odr,L_zsr, L_aux
 		
-def d2ve(pretrained=False, loss_params=None, args=None):
+def dvbe(pretrained=False, loss_params=None, args=None):
     """Constructs a ResNet-101 model.
 
     Args:
@@ -288,8 +288,8 @@ def d2ve(pretrained=False, loss_params=None, args=None):
     loss_model = Loss(args)
     if pretrained:
         model_dict = model.state_dict()
-        #pretrained_dict = model_zoo.load_url(model_urls['resnet101'])
-        pretrained_dict = torch.load('/model/mbobo/resnet101-5d3b4d8f/resnet101-5d3b4d8f.pth')
+        pretrained_dict = model_zoo.load_url(model_urls['resnet101'])
+        #pretrained_dict = torch.load('/model/mbobo/resnet101-5d3b4d8f/resnet101-5d3b4d8f.pth')
         pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
         model_dict.update(pretrained_dict)
         model.load_state_dict(model_dict)
