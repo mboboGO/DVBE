@@ -1,9 +1,11 @@
 # DVBE
-This is an implementation for Domain-aware Visual Bias Eliminating for Generalized Zero-Shot Learning[https://arxiv.org/pdf/2003.13261], which has been accepted by CVPR2020.
+This is an implementation for [Domain-aware Visual Bias Eliminating for Generalized Zero-Shot Learning](https://arxiv.org/pdf/2003.13261), which has been accepted by CVPR2020.
+
 DVBE is a new state-of-the-art method for generalized zero-shot learning.
 
 ## Introduction
 This project is a basic implementation of DVBE by pytorch platform.
+
 To do:
 1. adding the autoML part.
 2. publishing the segmentation version.
@@ -28,9 +30,10 @@ To do:
 
 ## Two-stage Training
 The training examples for the four datasets have been given in ./cub, ./awa2, ./apy, and ./sun.
-The training processing of DVBE consists of two stages, which is:
 
-1. Run `train.py` to train DSEN with fixed backbone
+In details, the training processing of DVBE consists of two stages, which is:
+
+1. Run `train.py` to train DVBE with fixed backbone
 
 	e.g. for training CUB 
 
