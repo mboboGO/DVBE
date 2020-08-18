@@ -265,7 +265,7 @@ class Loss(nn.Module):
         mw = torch.exp(-(y-1.0)**2/self.sigma)
         one_hot = torch.zeros_like(odr_logit)
         one_hot.scatter_(1, label.view(-1, 1), 1)
-        odr_logit = odr_logit*(1-one_hot*mw.view(mw.size(0),1))
+        odr_logit = odr_logit#*(1-one_hot*mw.view(mw.size(0),1))
         L_odr = self.cls_loss(odr_logit,label)
         
         ''' ZSL Loss '''
@@ -288,8 +288,8 @@ def dvbe(pretrained=False, loss_params=None, args=None):
     loss_model = Loss(args)
     if pretrained:
         model_dict = model.state_dict()
-        pretrained_dict = model_zoo.load_url(model_urls['resnet101'])
-        #pretrained_dict = torch.load('/model/mbobo/resnet101-5d3b4d8f/resnet101-5d3b4d8f.pth')
+        #pretrained_dict = model_zoo.load_url(model_urls['resnet101'])
+        pretrained_dict = torch.load("/data/cq14/CUB/models/resnet101-5d3b4d8f.pth")
         pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
         model_dict.update(pretrained_dict)
         model.load_state_dict(model_dict)

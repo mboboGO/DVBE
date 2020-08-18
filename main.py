@@ -74,11 +74,9 @@ parser.add_argument('--gpu', default=None, type=int,
                     help='GPU id to use.')
 parser.add_argument('--is_fix', dest='is_fix', action='store_true',
                     help='is_fix.')
-
-''' gcn'''
-parser.add_argument('--gcn_k', dest='gcn_k', default=0, type=int,
-                    help='k in gcn.')
-                    
+''' data proc '''
+parser.add_argument('--flippingtest', dest='flippingtest', action='store_true',
+                    help='flipping test.')
 ''' loss '''
 parser.add_argument('--sigma', dest='sigma', default=0.5, type=float,
                     help='sigma.')
@@ -118,7 +116,6 @@ def main():
 
     ''' data load info '''
     data_info = h5py.File(os.path.join('./data',args.data,'data_info.h5'), 'r')
-    #img_path = str(data_info['img_path'][...]).replace("b'",'').replace("'",'')
     nc = data_info['all_att'][...].shape[0]
     sf_size = data_info['all_att'][...].shape[1]
     semantic_data = {'seen_class':data_info['seen_class'][...],
@@ -189,15 +186,19 @@ def main():
 
     # Data loading code
     if args.data.lower()=='cub':
-        img_path = '/data/mbobo/CUB/CUB_200_2011/images/'
+        img_path = '/data/cq14/CUB/CUB_200_2011/images/'
     elif args.data.lower()=='awa2':
         img_path = '~~~/Animals_with_Attributes2/JPEGImages/'
+    elif args.data.lower()=='sun':
+        img_path = 'xxxx'
+    elif args.data.lower()=='apy':
+        img_path = 'xxxx'
         
     traindir = os.path.join('./data',args.data,'train.list')
     valdir1 = os.path.join('./data',args.data,'test_seen.list')
     valdir2 = os.path.join('./data',args.data,'test_unseen.list')
 
-    train_transforms, val_transforms = preprocess_strategy(args.data)
+    train_transforms, val_transforms = preprocess_strategy(args.data,args)
 
     train_dataset = datasets.ImageFolder(img_path,traindir,train_transforms)
 
@@ -223,7 +224,7 @@ def main():
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        adjust_learning_rate(optimizer, odr_optimizer, zsr_optimizer, epoch)
+        adjust_learning_rate(optimizer, odr_optimizer, zsr_optimizer, epoch, args)
 
         # train for one epoch
         train(train_loader,semantic_data, model, criterion, optimizer, odr_optimizer, zsr_optimizer, epoch,is_fix=args.is_fix)
@@ -296,6 +297,11 @@ def validate(val_loader1, val_loader2, semantic_data, model, criterion):
     
     # switch to evaluate mode
     model.eval()
+    
+    if args.flippingtest:#flipping test
+        test_flip = True
+    else:
+        test_flip = False
 
     with torch.no_grad():
         end = time.time()
@@ -304,10 +310,19 @@ def validate(val_loader1, val_loader2, semantic_data, model, criterion):
                 input = input.cuda(args.gpu, non_blocking=True)
             target = target.cuda(args.gpu, non_blocking=True)
             
+            if test_flip:                
+                [N,M,C,H,W] = input.size()
+                input = input.view(N*M,C,H,W)   #flipping test
+            
             # inference
             logits,feats = model(input)
-            odr_logit = logits[0].cpu().numpy()
-            zsl_logit = logits[1].cpu().numpy()
+            
+            if test_flip: 
+                odr_logit = F.softmax(logits[0],dim=1).view(N,M,-1).mean(dim=1).cpu().numpy()
+                zsl_logit = F.softmax(logits[1],dim=1).view(N,M,-1).mean(dim=1).cpu().numpy()
+            else:
+                odr_logit = logits[0].cpu().numpy()
+                zsl_logit = logits[1].cpu().numpy()
             zsl_logit_s = zsl_logit.copy();zsl_logit_s[:,unseen_c]=-1
             zsl_logit_t = zsl_logit.copy();zsl_logit_t[:,seen_c]=-1
 			
@@ -315,44 +330,77 @@ def validate(val_loader1, val_loader2, semantic_data, model, criterion):
             if(i==0):
                 gt_s = target.cpu().numpy()
                 odr_pre_s = np.argmax(odr_logit, axis=1)
-                odr_prob_s = softmax(odr_logit)
+                if test_flip: 
+                    odr_prob_s = odr_logit
+                else:
+                    odr_prob_s = softmax(odr_logit)
                 zsl_pre_sA = np.argmax(zsl_logit, axis=1)
                 zsl_pre_sS = np.argmax(zsl_logit_s, axis=1)
-                zsl_prob_s = softmax(zsl_logit_t)
+                if test_flip:
+                    zsl_prob_s = zsl_logit_t
+                else: 
+                    zsl_prob_s = softmax(zsl_logit_t)
             else:
                 gt_s = np.hstack([gt_s,target.cpu().numpy()])
                 odr_pre_s = np.hstack([odr_pre_s,np.argmax(odr_logit, axis=1)])
-                odr_prob_s = np.vstack([odr_prob_s,softmax(odr_logit)])
+                if test_flip:
+                    odr_prob_s = np.vstack([odr_prob_s,odr_logit])
+                else:
+                    odr_prob_s = np.vstack([odr_prob_s,softmax(odr_logit)])
                 zsl_pre_sA = np.hstack([zsl_pre_sA,np.argmax(zsl_logit, axis=1)])
                 zsl_pre_sS = np.hstack([zsl_pre_sS,np.argmax(zsl_logit_s, axis=1)])
-                zsl_prob_s = np.vstack([zsl_prob_s,softmax(zsl_logit_t)])
+                if test_flip:
+                    zsl_prob_s = np.vstack([zsl_prob_s,zsl_logit_t])
+                else:
+                    zsl_prob_s = np.vstack([zsl_prob_s,softmax(zsl_logit_t)])
 
         for i, (input, target) in enumerate(val_loader2):
             if args.gpu is not None:
                 input = input.cuda(args.gpu, non_blocking=True)
             target = target.cuda(args.gpu, non_blocking=True)
-
+            
+            if test_flip:                
+                [N,M,C,H,W] = input.size()
+                input = input.view(N*M,C,H,W)   #flipping test
+                
             # inference
-            logits,feats = model(input)
-            odr_logit = logits[0].cpu().numpy()
-            zsl_logit = logits[1].cpu().numpy()
+            logits,feats = model(input)           
+            
+            if test_flip: 
+                odr_logit = F.softmax(logits[0],dim=1).view(N,M,-1).mean(dim=1).cpu().numpy()
+                zsl_logit = F.softmax(logits[1],dim=1).view(N,M,-1).mean(dim=1).cpu().numpy()
+            else:
+                odr_logit = logits[0].cpu().numpy()
+                zsl_logit = logits[1].cpu().numpy()
             zsl_logit_s = zsl_logit.copy();zsl_logit_s[:,unseen_c]=-1
             zsl_logit_t = zsl_logit.copy();zsl_logit_t[:,seen_c]=-1
                 
             if(i==0):
                 gt_t = target.cpu().numpy()
                 odr_pre_t = np.argmax(odr_logit, axis=1)
-                odr_prob_t = softmax(odr_logit)
+                if test_flip: 
+                    odr_prob_t = odr_logit
+                else:
+                    odr_prob_t = softmax(odr_logit)
                 zsl_pre_tA = np.argmax(zsl_logit, axis=1)
                 zsl_pre_tT = np.argmax(zsl_logit_t, axis=1)
-                zsl_prob_t = softmax(zsl_logit_t)
+                if test_flip: 
+                    zsl_prob_t = zsl_logit_t
+                else:
+                    zsl_prob_t = softmax(zsl_logit_t)
             else:
                 gt_t = np.hstack([gt_t,target.cpu().numpy()])
                 odr_pre_t = np.hstack([odr_pre_t,np.argmax(odr_logit, axis=1)])
-                odr_prob_t = np.vstack([odr_prob_t,softmax(odr_logit)])
+                if test_flip: 
+                    odr_prob_t = np.vstack([odr_prob_t,odr_logit])
+                else:
+                    odr_prob_t = np.vstack([odr_prob_t,softmax(odr_logit)])
                 zsl_pre_tA = np.hstack([zsl_pre_tA,np.argmax(zsl_logit, axis=1)])
                 zsl_pre_tT = np.hstack([zsl_pre_tT,np.argmax(zsl_logit_t, axis=1)])
-                zsl_prob_t = np.vstack([zsl_prob_t,softmax(zsl_logit_t)])
+                if test_flip: 
+                    zsl_prob_t = np.vstack([zsl_prob_t,zsl_logit_t])
+                else:
+                    zsl_prob_t = np.vstack([zsl_prob_t,softmax(zsl_logit_t)])
                 
         odr_prob = np.vstack([odr_prob_s,odr_prob_t])
         zsl_prob = np.vstack([zsl_prob_s,zsl_prob_t])

@@ -152,12 +152,8 @@ def post_process(v_prob,a_prob,gt, split_num, seen_c,unseen_c,data):
         tau = -base* np.log(base)
         pre = v_pre
         for idx,class_i in enumerate(pre):
-            if data in ['cub']:
-                if(H_v[idx]-tau>0):
-                    pre[idx] = a_pre[idx]
-            elif data in ['cub','awa2','apy','sun']:
-                if(v_max[idx]-base<0):
-                    pre[idx] = a_pre[idx]
+            if(v_max[idx]-base<0):
+                pre[idx] = a_pre[idx]
                 
         pre_s = pre[:split_num];pre_t = pre[split_num:]
         gt_s = gt[:split_num];gt_t = gt[split_num:]
@@ -179,45 +175,32 @@ def post_process(v_prob,a_prob,gt, split_num, seen_c,unseen_c,data):
             
     return opt_H,opt_S,opt_U,opt_Ds,opt_Du,opt_tau
 
-def preprocess_strategy(dataset):
+def preprocess_strategy(dataset,args):
     evaluate_transforms = None
-    if dataset.startswith('sun'):
-        train_transforms = transforms.Compose([
-            transforms.RandomResizedCrop(448),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ])  
+    train_transforms = transforms.Compose([
+        transforms.RandomResizedCrop(448),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        normalize,
+    ])  
+    if args.flippingtest:
         val_transforms = transforms.Compose([
             transforms.Resize(480),
             transforms.CenterCrop(448),
-            transforms.ToTensor(),
-            normalize,
-        ]) 
+            transforms.Lambda(lambda x: [x,transforms.RandomHorizontalFlip(p=1.0)(x)]),
+            transforms.Lambda(lambda crops: [transforms.ToTensor()(crop) for crop in crops]),
+            transforms.Lambda(lambda crops: [normalize(crop) for crop in crops]),
+            transforms.Lambda(lambda crops: torch.stack(crops))
+        ])    
     else:
-        train_transforms = transforms.Compose([
-            transforms.RandomResizedCrop(448),
-            #transforms.Resize(448),
-            #transforms.CenterCrop(448),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ])  
         val_transforms = transforms.Compose([
             transforms.Resize(480),
-            #transforms.Resize(448),
             transforms.CenterCrop(448),
             transforms.ToTensor(),
             normalize,
         ])  
-        #evaluate_transforms = transforms.Compose([
-        #    transforms.Resize(480),
-        #    CenterCropWithFlip(448),
-        #    transforms.Lambda(lambda crops: torch.stack([transforms.ToTensor()(crop) for crop in crops])),
-        #    transforms.Lambda(lambda crops: torch.stack([normalize(crop) for crop in crops])),
-        #])
-    return train_transforms, val_transforms#, evaluate_transforms
-    
+
+    return train_transforms, val_transforms
     
 def count_parameters_in_MB(model):
     return np.sum(np.prod(v.size()) for name, v in model.named_parameters() if "auxiliary" not in name)/1e6
@@ -228,7 +211,7 @@ def save_checkpoint(state, filename='checkpoint.pth.tar'):
     torch.save(state, filename)
 
 
-def adjust_learning_rate(optimizer, optimizer1, optimizer2 , epoch):
+def adjust_learning_rate(optimizer, optimizer1, optimizer2 , epoch, args):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     lr = args.lr1 * (0.1 ** (epoch // args.epoch_decay))
     for param_group in optimizer.param_groups:

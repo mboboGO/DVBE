@@ -24,7 +24,7 @@ To do:
 
 ## Datasets Prepare
 
-1. Download correspond dataset, e.g., CUB, AWA2, aPY, and SUN. Assume your data path is ${PATH}.
+1. Downloading correspond dataset, e.g., CUB, AWA2, aPY, and SUN. Assume your data path is ${PATH}. A provided url is: (https://pan.baidu.com/s/1RYCZzKOuhDObuO-l-Ig78A     73rw)
 
 2. Changing the data path around the line 190 of main.py, according to your ${PATH}.
 
@@ -50,5 +50,7 @@ In details, the training processing of DVBE consists of two stages, which is:
 					-b 16 --lr 0.001 \
 					--epoch 180 --resume ./checkpoints/fix.model
 	```
+For reproducibility, a suggested seed can be cub: (5181,6803), awa2: (142,6059), apy: (119,4).
+Besies, better performance can be obtained by flipping test, when setting --args.val_flippingtest
 
 The reimplementation results and models are soon provided!
