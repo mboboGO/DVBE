@@ -265,7 +265,7 @@ class Loss(nn.Module):
         mw = torch.exp(-(y-1.0)**2/self.sigma)
         one_hot = torch.zeros_like(odr_logit)
         one_hot.scatter_(1, label.view(-1, 1), 1)
-        odr_logit = odr_logit#*(1-one_hot*mw.view(mw.size(0),1))
+        odr_logit = odr_logit*(1-one_hot*mw.view(mw.size(0),1))
         L_odr = self.cls_loss(odr_logit,label)
         
         ''' ZSL Loss '''
